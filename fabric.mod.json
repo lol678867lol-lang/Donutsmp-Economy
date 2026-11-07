@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "donutmod",
+  "version": "${version}",
+  "name": "DonutMod",
+  "description": "/sell, /ah und /order mit Bots und Metas (Singleplayer).",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["de.donutmod.DonutMod"],
+    "client": ["de.donutmod.DonutClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.17.3",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
