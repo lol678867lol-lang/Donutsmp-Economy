@@ -1,12 +1,13 @@
 package de.donutmod.core;
 
 import java.util.*;
+import java.util.function.Function;
 import java.util.function.ToLongFunction;
 
 /**
  * Preise aus Rezepten: Preis = Summe der Zutaten * markup / Anzahl Ergebnisse.
  * markup > 1  =>  ein Item ist immer mehr wert als seine Zutaten (Stone > Cobblestone).
- * Items ohne Rezept (Rohstoffe) nutzen raw(); explizite Preise im PriceBook haben Vorrang.
+ * Items mit festem Preis (fixed) und Items ohne Rezept (raw) werden nicht berechnet.
  */
 public class RecipeGraph {
     public record Ing(List<String> options, int count) {}
@@ -15,18 +16,20 @@ public class RecipeGraph {
     public double markup = 1.10;
     private final Map<String, List<Recipe>> byOut = new HashMap<>();
     private final Map<String, Long> memo = new HashMap<>();
-    private final PriceBook prices;
+    private final Function<String, Long> fixed;
     private final ToLongFunction<String> raw;
 
-    public RecipeGraph(PriceBook prices, ToLongFunction<String> raw) { this.prices = prices; this.raw = raw; }
+    public RecipeGraph(Function<String, Long> fixed, ToLongFunction<String> raw) { this.fixed = fixed; this.raw = raw; }
 
     public void add(Recipe r) { byOut.computeIfAbsent(r.out(), k -> new ArrayList<>()).add(r); memo.clear(); }
+    public boolean has(String id) { return byOut.containsKey(id); }
+    public int size() { return byOut.size(); }
 
     public long price(String id) { return price(id, new HashSet<>()); }
 
     private long price(String id, Set<String> visiting) {
-        Long e = prices.explicit(id);
-        if (e != null) return e;
+        Long f = fixed.apply(id);
+        if (f != null) return f;
         Long m = memo.get(id);
         if (m != null) return m;
         List<Recipe> rs = byOut.get(id);
@@ -37,7 +40,7 @@ public class RecipeGraph {
                 for (Ing ing : r.ings()) {
                     long cheapest = -1;
                     for (String opt : ing.options()) {
-                        if (visiting.contains(opt)) continue;   // Zyklen (z.B. Eisenblock <-> Barren) vermeiden
+                        if (visiting.contains(opt)) continue;       // Zyklen (z.B. Eisenblock <-> Barren) vermeiden
                         long p = price(opt, visiting);
                         if (p > 0 && (cheapest < 0 || p < cheapest)) cheapest = p;
                     }
@@ -50,7 +53,7 @@ public class RecipeGraph {
             }
             visiting.remove(id);
             if (best > 0) {
-                long v = Math.max(1, (long) Math.ceil(best));
+                long v = Math.max(1, (long) Math.ceil(best - 1e-6));   // 1e-6: Gleitkomma-Rauschen (110.00000000000001) nicht aufrunden
                 memo.put(id, v);
                 return v;
             }

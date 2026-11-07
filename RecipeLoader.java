@@ -1,44 +1,68 @@
-package de.donutmod;
+package de.donutmod.fabric;
 
-import com.google.gson.*;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import de.donutmod.core.RecipeGraph;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.item.Item;
-import net.minecraft.registry.tag.TagKey;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.util.Identifier;
 
 import java.io.BufferedReader;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-/** Liest alle Vanilla-/Mod-Rezepte (data/*/recipe/*.json) und füttert den RecipeGraph. */
+/** Liest alle Rezepte (Vanilla und andere Mods) aus den Datenpaketen und fuettert den RecipeGraph. */
 final class RecipeLoader {
-    static void load(MinecraftServer server, RecipeGraph g) {
-        var found = server.getResourceManager().findResources("recipe", id -> id.getPath().endsWith(".json"));
-        for (var e : found.entrySet()) {
-            try (BufferedReader r = e.getValue().getReader()) {
-                JsonObject o = JsonParser.parseReader(r).getAsJsonObject();
-                parse(o, g);
-            } catch (Exception ignored) { /* kaputtes/unbekanntes Rezept überspringen */ }
-        }
+    private RecipeLoader() {}
+
+    /** Haeufige Tags -> ein typisches Item (Tags selbst aufzuloesen waere versionsabhaengig). */
+    static final Map<String, String> TAGS = new HashMap<>();
+    static {
+        String[][] t = {
+                {"planks", "oak_planks"}, {"logs", "oak_log"}, {"logs_that_burn", "oak_log"}, {"oak_logs", "oak_log"},
+                {"wooden_slabs", "oak_slab"}, {"wooden_stairs", "oak_stairs"}, {"wooden_fences", "oak_fence"},
+                {"wooden_doors", "oak_door"}, {"wooden_trapdoors", "oak_trapdoor"}, {"wooden_buttons", "oak_button"},
+                {"wooden_pressure_plates", "oak_pressure_plate"}, {"wool", "white_wool"}, {"sand", "sand"},
+                {"stone_crafting_materials", "cobblestone"}, {"stone_tool_materials", "cobblestone"},
+                {"coals", "coal"}, {"soul_fire_base_blocks", "soul_sand"}, {"fences", "oak_fence"},
+                {"boats", "oak_boat"}, {"signs", "oak_sign"}, {"banners", "white_banner"}, {"beds", "white_bed"},
+                {"terracotta", "terracotta"}, {"candles", "candle"}, {"fishes", "cod"}, {"eggs", "egg"}
+        };
+        for (String[] e : t) TAGS.put("minecraft:" + e[0], "minecraft:" + e[1]);
+    }
+
+    static void load(RecipeGraph g) {
+        try {
+            var found = DonutMod.INSTANCE.srv.getResourceManager().listResources("recipe", id -> id.getPath().endsWith(".json"));
+            for (var e : found.entrySet()) {
+                try (BufferedReader r = e.getValue().openAsReader()) {
+                    parse(JsonParser.parseReader(r).getAsJsonObject(), g);
+                } catch (Exception ignored) { /* unbekanntes oder kaputtes Rezept ueberspringen */ }
+            }
+        } catch (Exception ex) { System.err.println("[DonutMod] Rezepte lesen fehlgeschlagen: " + ex); }
+        System.out.println("[DonutMod] Rezepte fuer Preise: " + g.size() + " Items");
     }
 
     private static void parse(JsonObject o, RecipeGraph g) {
-        String type = o.get("type").getAsString().replace("minecraft:", "");
-        String out; int outCount = 1;
+        if (!o.has("type")) return;
+        String type = o.get("type").getAsString();
+        String t = type.contains(":") ? type.substring(type.indexOf(':') + 1) : type;
         JsonElement res = o.has("result") ? o.get("result") : o.get("results");
         if (res != null && res.isJsonArray()) res = res.getAsJsonArray().isEmpty() ? null : res.getAsJsonArray().get(0);
         if (res == null) return;
+        String out; int outCount = 1;
         if (res.isJsonPrimitive()) out = res.getAsString();
         else {
             JsonObject ro = res.getAsJsonObject();
-            out = (ro.has("id") ? ro.get("id") : ro.get("item")).getAsString();
+            JsonElement idEl = ro.has("id") ? ro.get("id") : ro.get("item");
+            if (idEl == null) return;
+            out = idEl.getAsString();
             if (ro.has("count")) outCount = ro.get("count").getAsInt();
         }
+        if (!out.contains(":")) out = "minecraft:" + out;
         List<RecipeGraph.Ing> ings = new ArrayList<>();
-        switch (type) {
+        switch (t) {
             case "crafting_shaped" -> {
                 Map<Character, Integer> counts = new HashMap<>();
                 for (JsonElement row : o.getAsJsonArray("pattern"))
@@ -90,7 +114,7 @@ final class RecipeLoader {
         g.add(new RecipeGraph.Recipe(out, outCount, ings));
     }
 
-    /** Zutat als Liste möglicher Item-IDs (Tags werden aufgelöst). */
+    /** Zutat als Liste moeglicher Item-IDs. */
     private static List<String> options(JsonElement el) {
         List<String> out = new ArrayList<>();
         if (el == null) return out;
@@ -105,9 +129,10 @@ final class RecipeLoader {
     }
 
     private static void add(List<String> out, String s) {
-        if (!s.startsWith("#")) { out.add(s); return; }
-        TagKey<Item> tag = TagKey.of(RegistryKeys.ITEM, Identifier.of(s.substring(1)));
-        for (RegistryEntry<Item> e : Registries.ITEM.iterateEntries(tag))
-            e.getKey().ifPresent(k -> out.add(k.getValue().toString()));
+        if (!s.startsWith("#")) { out.add(s.contains(":") ? s : "minecraft:" + s); return; }
+        String tag = s.substring(1);
+        if (!tag.contains(":")) tag = "minecraft:" + tag;
+        String rep = TAGS.get(tag);
+        if (rep != null) out.add(rep);   // unbekannte Tags: keine Option -> Rezept wird uebersprungen
     }
 }
