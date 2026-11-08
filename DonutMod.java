@@ -285,13 +285,19 @@ public class DonutMod implements ModInitializer {
     /** /mod on|off: bei "aus" verschwinden Mod-Items aus Bot-Angeboten/-Orders, aus /sell und aus den Menues. */
     void setModItems(boolean on) {
         Settings.setMods(on);
-        if (!on && market != null) {
-            for (AuctionHouse.Listing l : new ArrayList<>(ah.all()))
-                if (l.seller == null && isMod(l.stack.id()) && ah.cancel(l)) { market.ahRemoved(l); ahItems.remove(l.id); }
-            for (Orders.Order o : new ArrayList<>(orders.all()))
-                if (o.owner == null && isMod(o.itemId) && orders.cancel(o)) market.ordersRemoved(o);
-        }
+        if (!on) removeBots(DonutMod::isMod);
         initItems();
+    }
+
+    /** Entfernt alle Bot-Angebote und Bot-Orders, deren Item das Filter erfuellt (ein Durchlauf, schnell auch bei Millionen). */
+    void removeBots(java.util.function.Predicate<String> idFilter) {
+        for (AuctionHouse.Listing l : ah.removeBotsIf(x -> idFilter.test(x.stack.id()))) {
+            ahItems.remove(l.id);
+            if (market != null) market.ahRemoved(l);
+        }
+        for (Orders.Order o : orders.removeBotsIf(x -> idFilter.test(x.itemId)))
+            if (market != null) market.ordersRemoved(o);
+        if (market != null) { market.ahCache.clear(); market.ahCacheTime.clear(); market.ordersCache = null; }
     }
 
     void initItems() {
@@ -493,6 +499,7 @@ public class DonutMod implements ModInitializer {
 
     /** Immer mindestens 2 Angebote pro Shard-Werkzeug und Spawner (15-30 Mio. bzw. Spawner-Preise). */
     void seedCustom() {
+        if (!Settings.bots) return;
         Map<String, Integer> have = new HashMap<>();
         for (ItemStack s : ahItems.values()) { String cid = Custom.idOf(s); if (cid != null) have.merge(cid, 1, Integer::sum); }
         for (Map.Entry<String, Long> e : Custom.BASE.entrySet()) {
@@ -507,6 +514,7 @@ public class DonutMod implements ModInitializer {
     }
 
     void botCycle(MinecraftServer server) {
+        if (!Settings.bots) { prices.decay(); return; }   // /bot off: keine Bot-Kaeufe und keine Lieferungen
         for (AuctionHouse.Listing l : ah.botBuyPlayerListings(RND)) {
             ItemStack st = ahItems.remove(l.id);
             if (market != null) market.ahRemoved(l);
@@ -676,6 +684,29 @@ public class DonutMod implements ModInitializer {
         // /settings (jeder), /opsettings und /mod on|off (nur OP)
         d.register(Commands.literal("settings").executes(c -> { Gui.openSettings(this, c.getSource().getPlayerOrException()); return 1; }));
         d.register(Commands.literal("opsettings").requires(isOp).executes(c -> { Gui.openOpSettings(this, c.getSource().getPlayerOrException()); return 1; }));
+        // /bot: on | off | create order <item> <preis> [menge] | create ah <item> <preis> [menge]   (nur OP)
+        d.register(Commands.literal("bot").requires(isOp)
+                .executes(c -> msg(c, "§eBots: " + (Settings.bots ? "§aAN" : "§cAUS") + " §7| Angebote: " + fmt(ah.size()) + ", Orders: " + fmt(orders.size())))
+                .then(Commands.literal("on").executes(c -> { Settings.setBots(true); return msg(c, "§aBots: AN (Angebote und Orders füllen sich wieder)"); }))
+                .then(Commands.literal("off").executes(c -> {
+                    Settings.setBots(false);
+                    removeBots(id -> true);
+                    return msg(c, "§cBots: AUS (alle Bot-Angebote und Bot-Orders entfernt)");
+                }))
+                .then(Commands.literal("create")
+                        .then(Commands.literal("order").then(Commands.argument("item", StringArgumentType.word())
+                                .suggests((ctx, sb) -> SharedSuggestionProvider.suggest(itemPaths(), sb))
+                                .then(Commands.argument("preis", StringArgumentType.word())
+                                        .executes(c -> botCreateOrder(c, 0))
+                                        .then(Commands.argument("menge", IntegerArgumentType.integer(1))
+                                                .executes(c -> botCreateOrder(c, IntegerArgumentType.getInteger(c, "menge")))))))
+                        .then(Commands.literal("ah").then(Commands.argument("item", StringArgumentType.word())
+                                .suggests((ctx, sb) -> SharedSuggestionProvider.suggest(itemPaths(), sb))
+                                .then(Commands.argument("preis", StringArgumentType.word())
+                                        .executes(c -> botCreateAh(c, 1))
+                                        .then(Commands.argument("menge", IntegerArgumentType.integer(1))
+                                                .executes(c -> botCreateAh(c, IntegerArgumentType.getInteger(c, "menge")))))))));
+
         d.register(Commands.literal("mod").requires(isOp)
                 .executes(c -> msg(c, "§eMod-Items: " + (Settings.modItems ? "§aAN" : "§cAUS")))
                 .then(Commands.literal("on").executes(c -> { setModItems(true); return msg(c, "§aMod-Items: AN (verkaufbar, in /ah und Orders)"); }))
@@ -834,6 +865,52 @@ public class DonutMod implements ModInitializer {
         long pay = sell.sell(p.getUUID(), stacks).payout();
         ping(p, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.0f);
         return msg(c, "§aVerkauft für $" + fmt(pay) + " §7| Kontostand: $" + fmt(eco.get(p.getUUID())));
+    }
+
+    /** "kelp" -> "minecraft:kelp"; Items anderer Mods auch ohne Namensraum (z.B. "brass_ingot"). null = unbekannt. */
+    static String resolveItem(String in) {
+        String s = in.toLowerCase(Locale.ROOT).trim();
+        if (ITEM_BY_ID.containsKey(s)) return s;
+        if (ITEM_BY_ID.containsKey("minecraft:" + s)) return "minecraft:" + s;
+        if (ITEM_BY_ID.containsKey("donutmod:" + s)) return "donutmod:" + s;
+        for (String id : ITEM_BY_ID.keySet()) if (id.endsWith(":" + s)) return id;
+        return null;
+    }
+
+    static List<String> itemPaths() {
+        List<String> l = new ArrayList<>();
+        for (String id : ITEM_BY_ID.keySet()) if (!id.equals("minecraft:air")) l.add(id.substring(id.indexOf(':') + 1));
+        Collections.sort(l);
+        return l;
+    }
+
+    /** /bot create order <item> <preis> [menge]: Preis pro Stueck. */
+    int botCreateOrder(CommandContext<CommandSourceStack> c, int menge) {
+        if (!Settings.bots) return msg(c, "§cBots sind aus (/bot on).");
+        long price = parseAmount(StringArgumentType.getString(c, "preis"));
+        if (price <= 0) return msg(c, "§cUngültiger Preis. Beispiele: 500, 1.5k, 2m, 3b");
+        String id = resolveItem(StringArgumentType.getString(c, "item"));
+        if (id == null) return msg(c, "§cItem unbekannt.");
+        if (!allowed(id)) return msg(c, "§cItems anderer Mods sind ausgeschaltet (/mod on).");
+        int amount = menge > 0 ? menge : Math.max(1, ITEM_BY_ID.get(id).getDefaultInstance().getMaxStackSize());
+        Orders.Order o = orders.restore(null, id, Market.NONE, amount, price);
+        if (market != null) { market.orderCount.merge(id, 1, Integer::sum); market.ordersCache = null; }
+        return msg(c, "§aBot-Order #" + o.id + ": §f" + amount + "x " + id + " §afür $" + fmt(price) + " pro Stück");
+    }
+
+    /** /bot create ah <item> <preis> [menge]: Preis fuer das ganze Angebot. */
+    int botCreateAh(CommandContext<CommandSourceStack> c, int menge) {
+        if (!Settings.bots) return msg(c, "§cBots sind aus (/bot on).");
+        String id = resolveItem(StringArgumentType.getString(c, "item"));
+        if (id == null) return msg(c, "§cItem unbekannt.");
+        if (!allowed(id)) return msg(c, "§cItems anderer Mods sind ausgeschaltet (/mod on).");
+        long price = parseAmount(StringArgumentType.getString(c, "preis"));
+        if (price <= 0) return msg(c, "§cUngültiger Preis. Beispiele: 500, 1.5k, 2m, 3b");
+        int max = Math.max(1, ITEM_BY_ID.get(id).getDefaultInstance().getMaxStackSize());
+        int count = Math.min(Math.max(1, menge), max);
+        AuctionHouse.Listing l = ah.list(null, new Stack(id, count, Market.NONE), price);
+        if (market != null) { market.ahCount.merge(id, 1, Integer::sum); market.ahCache.clear(); market.ahCacheTime.clear(); }
+        return msg(c, "§aBot-Angebot #" + l.id + ": §f" + count + "x " + id + " §afür $" + fmt(price));
     }
 
     static int msg(CommandContext<CommandSourceStack> c, String s) {

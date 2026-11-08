@@ -200,6 +200,7 @@ public final class Market {
 
     /** Je Shard-Werkzeug/Spawner immer eine Bot-Order. */
     void ensureCustomOrders() {
+        if (!Settings.bots) return;
         Set<String> have = new HashSet<>();
         for (Orders.Order o : m.orders.all()) if (o.owner == null && o.itemId.startsWith("donutmod:")) have.add(o.itemId);
         for (String cid : Custom.BASE.keySet())
@@ -208,7 +209,7 @@ public final class Market {
 
     // ---------- Takt ----------
     void tick(int t) {
-        if (m.pool.isEmpty()) return;
+        if (m.pool.isEmpty() || !Settings.bots) return;
         // Aufbau nur mit begrenzter Rechenzeit pro Tick (auf schwachen PCs weniger), damit nichts ruckelt
         long end = System.nanoTime() + Perf.BUDGET_NS;
         while (System.nanoTime() < end) {

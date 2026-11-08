@@ -101,6 +101,15 @@ public final class Bases {
         CommandRegistrationCallback.EVENT.register((d, ctx, env) -> {
             var gm = d.getRoot().getChild("gamemode");
             java.util.function.Predicate<CommandSourceStack> isOp = gm != null ? gm.getRequirement() : (src -> false);
+            // /fakebase on|off und /fakebase spawn stash|farm|bigstash (nur OP)
+            d.register(Commands.literal("fakebase").requires(isOp)
+                    .executes(c -> DonutMod.msg(c, "§eFake-Basen: " + (Settings.fakeBases ? "§aAN" : "§cAUS")))
+                    .then(Commands.literal("on").executes(c -> { Settings.setFakeBases(true); return DonutMod.msg(c, "§aFake-Basen: AN (entstehen wieder automatisch)"); }))
+                    .then(Commands.literal("off").executes(c -> { Settings.setFakeBases(false); return DonutMod.msg(c, "§cFake-Basen: AUS (es entstehen keine neuen, bestehende bleiben)"); }))
+                    .then(Commands.literal("spawn")
+                            .then(Commands.literal("stash").executes(c -> spawnHere(c, 1)))
+                            .then(Commands.literal("farm").executes(c -> spawnHere(c, 2)))
+                            .then(Commands.literal("bigstash").executes(c -> spawnHere(c, 3)))));
             d.register(Commands.literal("nearbase").requires(isOp).executes(c -> {
                 ServerPlayer p = c.getSource().getPlayerOrException();
                 int ci = Math.floorDiv((int) p.getX(), SPACING), cj = Math.floorDiv((int) p.getZ(), SPACING);
@@ -152,6 +161,7 @@ public final class Bases {
     }
 
     static void scan(MinecraftServer server) {
+        if (!Settings.fakeBases) return;   // /fakebase off
         DonutMod m = DonutMod.INSTANCE;
         if (m == null || m.enchList.isEmpty()) return;
         for (ServerPlayer p : server.getPlayerList().getPlayers()) {
@@ -188,18 +198,40 @@ public final class Bases {
         return false;
     }
 
-    static void generate(DonutMod m, ServerLevel level, Random r, int bx, int bz) {
-        boolean farm = r.nextInt(100) < 40;
-        boolean rare = !farm && r.nextInt(100) < 15;
+    static void generate(DonutMod m, ServerLevel level, Random r, int bx, int bz) { generate(m, level, r, bx, bz, 0); }
+
+    /** Treibt eine Basis; mode: 0 = zufaellig, 1 = stash, 2 = farm, 3 = bigstash. Rueckgabe: Boden-y, oder Integer.MIN_VALUE wenn es nicht ging. */
+    static int generate(DonutMod m, ServerLevel level, Random r, int bx, int bz, int mode) {
+        boolean farm = mode == 0 ? r.nextInt(100) < 40 : mode == 2;
+        boolean rare = mode == 0 ? (!farm && r.nextInt(100) < 15) : mode == 3;
         int sx = farm ? 25 : 21, sz = farm ? 21 : 15;   // deutlich groessere Basen
-        for (int attempt = 0; attempt < 16; attempt++) {
-            int y0 = -46 + r.nextInt(27);   // Boden zwischen y=-46 und y=-20, also immer unter -8
-            // keine Fluessigkeit (Wasser/Lava) im Bereich inkl. 2 Bloecken Rand
-            if (hasFluid(level, bx - 2, y0 - 2, bz - 2, bx + sx + 1, y0 + 7, bz + sz + 1)) continue;
-            if (farm) buildFarm(m, level, r, bx, y0, bz, sx, sz);
-            else buildStash(m, level, r, bx, y0, bz, sx, sz, rare);
-            return;
-        }
+        FORCE_BIG = mode == 3;
+        try {
+            for (int attempt = 0; attempt < 16; attempt++) {
+                int y0 = -46 + r.nextInt(27);   // Boden zwischen y=-46 und y=-20, also immer unter -8
+                // keine Fluessigkeit (Wasser/Lava) im Bereich inkl. 2 Bloecken Rand
+                if (hasFluid(level, bx - 2, y0 - 2, bz - 2, bx + sx + 1, y0 + 7, bz + sz + 1)) continue;
+                if (farm) buildFarm(m, level, r, bx, y0, bz, sx, sz);
+                else buildStash(m, level, r, bx, y0, bz, sx, sz, rare);
+                return y0;
+            }
+        } finally { FORCE_BIG = false; }
+        return Integer.MIN_VALUE;
+    }
+
+    static boolean FORCE_BIG = false;
+
+    static int spawnHere(com.mojang.brigadier.context.CommandContext<CommandSourceStack> c, int mode) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer p = c.getSource().getPlayerOrException();
+        Level lv = p.level();
+        if (!(lv instanceof ServerLevel level) || !level.dimension().equals(Level.OVERWORLD)) return DonutMod.msg(c, "§cNur in der Overworld.");
+        DonutMod m = DonutMod.INSTANCE;
+        if (m == null || m.enchList.isEmpty()) return DonutMod.msg(c, "§cNoch nicht bereit, versuch es gleich nochmal.");
+        int bx = (int) p.getX() + 2, bz = (int) p.getZ() + 2;
+        int y = generate(m, level, new Random(), bx, bz, mode);
+        String name = mode == 1 ? "Stash" : mode == 2 ? "Farm" : "Big-Stash";
+        if (y == Integer.MIN_VALUE) return DonutMod.msg(c, "§cHier ging es nicht (Wasser oder Lava im Weg). Geh ein Stück weiter.");
+        return DonutMod.msg(c, "§aFake-" + name + " gebaut: X=" + bx + " Z=" + bz + ", Boden y=" + y + " (unter dir).");
     }
 
     static void room(ServerLevel level, int x0, int y0, int z0, int sx, int sz) {
@@ -224,7 +256,7 @@ public final class Bases {
     }
 
     /** Normale Basen: 1-20 Spawner gestapelt; in ca. 15 % der Basen ein Riesen-Stapel mit 1000-2000 Spawnern. */
-    static int stackFor(Random r) { return r.nextInt(100) < 15 ? 1000 + r.nextInt(1001) : 1 + r.nextInt(20); }
+    static int stackFor(Random r) { if (FORCE_BIG) return 1000 + r.nextInt(1001); return r.nextInt(100) < 15 ? 1000 + r.nextInt(1001) : 1 + r.nextInt(20); }
 
     static void spawner(ServerLevel level, BlockPos p, String type, Random r) {
         level.setBlock(p, Blocks.SPAWNER.defaultBlockState(), 2);

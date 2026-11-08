@@ -645,13 +645,22 @@ public final class Gui {
         SimpleContainer box = new SimpleContainer(54);
         Runnable render = () -> {
             for (int i = 0; i < 54; i++) box.setItem(i, pane());
-            box.setItem(22, toggle(Settings.modItems, "Mod-Items", "§7Aus = Items anderer Mods werden nicht verkauft",
+            box.setItem(20, toggle(Settings.bots, "Bots", "§7Aus = alle Bot-Angebote und Bot-Orders werden entfernt,",
+                    "§7Bots kaufen und liefern nicht mehr.", "§7(gleich wie /bot on|off)"));
+            box.setItem(22, toggle(Settings.fakeBases, "Fake-Basen", "§7Aus = es entstehen keine neuen Fake-Basen",
+                    "§7(bestehende bleiben).", "§7(gleich wie /fakebase on|off)"));
+            box.setItem(24, toggle(Settings.modItems, "Mod-Items", "§7Aus = Items anderer Mods werden nicht verkauft",
                     "§7und sind nicht in /ah und Orders.", "§7(gleich wie /mod on|off)"));
         };
         render.run();
         p.openMenu(new SimpleMenuProvider((id, inv, pl) ->
                 new Menu(id, inv, box, true, Set.<Integer>of(), (slot, sp) -> {
-                    if (slot == 22) m.setModItems(!Settings.modItems);
+                    if (slot == 20) {
+                        boolean on = !Settings.bots;
+                        Settings.setBots(on);
+                        if (!on) m.removeBots(x -> true);
+                    } else if (slot == 22) Settings.setFakeBases(!Settings.fakeBases);
+                    else if (slot == 24) m.setModItems(!Settings.modItems);
                     render.run();
                 }, null, null),
                 Component.literal("OP-Settings")));

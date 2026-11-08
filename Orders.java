@@ -43,6 +43,20 @@ public class Orders {
         return r;
     }
 
+    /** Entfernt alle Bot-Orders, die das Filter erfuellt (ein Durchlauf, schnell auch bei Millionen Eintraegen). */
+    public List<Order> removeBotsIf(java.util.function.Predicate<Order> p) {
+        List<Order> out = new ArrayList<>();
+        Set<String> items = new HashSet<>();
+        for (Order o : orders) if (o.owner == null && p.test(o)) { o.removed = true; out.add(o); items.add(o.itemId); }
+        if (out.isEmpty()) return out;
+        orders.removeIf(o -> o.removed);
+        for (String id : items) {
+            List<Order> l = byItem.get(id);
+            if (l != null) { l.removeIf(o -> o.removed); if (l.isEmpty()) byItem.remove(id); }
+        }
+        return out;
+    }
+
     /** Entfernt bis zu n zufaellige Bot-Orders (Bots haben sie erfuellt). */
     public List<Order> removeRandomBots(int n, Random rnd) {
         List<Order> out = new ArrayList<>();

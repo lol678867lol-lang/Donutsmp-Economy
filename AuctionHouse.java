@@ -103,6 +103,14 @@ public class AuctionHouse {
         removeListing(l);
         return true;
     }
+    /** Entfernt alle Bot-Angebote, die das Filter erfuellt (ein Durchlauf, schnell auch bei Millionen Eintraegen). */
+    public List<Listing> removeBotsIf(java.util.function.Predicate<Listing> p) {
+        List<Listing> out = new ArrayList<>();
+        for (Listing l : listings) if (l.seller == null && p.test(l)) { l.removed = true; out.add(l); }
+        if (!out.isEmpty()) listings.removeIf(l -> l.removed);
+        return out;
+    }
+
     /** Angebot zurueckziehen (Verkaeufer holt sein Item zurueck). */
     public boolean cancel(Listing l) { return removeListing(l); }
 }

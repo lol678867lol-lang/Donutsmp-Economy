@@ -18,6 +18,10 @@ public final class Settings {
     static boolean shortNumbers = true;
     /** Items anderer Mods verkaufbar und in /ah und Orders. */
     static boolean modItems = true;
+    /** /bot on|off: Bots fuellen /ah und Orders und kaufen/liefern. */
+    static boolean bots = true;
+    /** /fakebase on|off: automatische Fake-Basen (Stashes/Farmen) unter der Erde. */
+    static boolean fakeBases = true;
     /** Pro Spieler: [0] = Geld-Anzeige (Sidebar), [1] = Money Name Tags (Geld unter dem Namen). */
     private static final Map<UUID, boolean[]> PLAYERS = new HashMap<>();
 
@@ -29,6 +33,8 @@ public final class Settings {
     static void setTags(UUID u, boolean v) { of(u)[1] = v; save(); }
     static void setShort(boolean v) { shortNumbers = v; save(); }
     static void setMods(boolean v) { modItems = v; save(); }
+    static void setBots(boolean v) { bots = v; save(); }
+    static void setFakeBases(boolean v) { fakeBases = v; save(); }
 
     static java.nio.file.Path file() { return DonutMod.worldDir().resolve("donutmod-settings.json"); }
 
@@ -36,11 +42,15 @@ public final class Settings {
         PLAYERS.clear();
         shortNumbers = true;
         modItems = true;
+        bots = true;
+        fakeBases = true;
         try {
             if (!Files.exists(file())) return;
             JsonObject o = JsonParser.parseString(Files.readString(file())).getAsJsonObject();
             if (o.has("shortNumbers")) shortNumbers = o.get("shortNumbers").getAsBoolean();
             if (o.has("modItems")) modItems = o.get("modItems").getAsBoolean();
+            if (o.has("bots")) bots = o.get("bots").getAsBoolean();
+            if (o.has("fakeBases")) fakeBases = o.get("fakeBases").getAsBoolean();
             if (o.has("players"))
                 for (var e : o.getAsJsonObject("players").entrySet()) {
                     JsonObject v = e.getValue().getAsJsonObject();
@@ -55,6 +65,8 @@ public final class Settings {
             JsonObject o = new JsonObject();
             o.addProperty("shortNumbers", shortNumbers);
             o.addProperty("modItems", modItems);
+            o.addProperty("bots", bots);
+            o.addProperty("fakeBases", fakeBases);
             JsonObject pl = new JsonObject();
             for (var e : PLAYERS.entrySet()) {
                 JsonObject v = new JsonObject();
